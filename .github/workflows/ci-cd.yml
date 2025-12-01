@@ -1,0 +1,82 @@
+# .github/workflows/ci-cd.yml
+name: DevSecOps Microservice Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY_URL: ghcr.io/${{ github.repository_owner }}
+  IMAGE_NAME: devsecops-hello-world
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    # SAST (Static Analysis - Bandit)
+    - name: Run SAST Scan (Bandit)
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - run: pip install bandit && bandit -r app.py --format screen -lll
+
+    # Build Docker Image
+    - name: Log in to the Container registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY_URL }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Build and Tag Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+    # SCA/Container Scanning (Trivy)
+    - name: Run Trivy vulnerability scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        format: 'table'
+        exit-code: '1' 
+        severity: 'CRITICAL,HIGH'
+
+  deploy-staging-and-dast:
+    needs: build-and-scan
+    runs-on: ubuntu-latest
+    environment: Staging
+    steps:
+    - uses: actions/checkout@v4
+
+    # Deployment to Staging (Requires KUBECONFIG secret)
+    - name: Deploy to Staging Kubernetes
+      uses: azure/setup-kubectl@v4
+    - run: |
+        IMAGE_TAG=${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        sed -i "s|__IMAGE_TAG__|$IMAGE_TAG|g" k8s/deployment.yaml
+        # The cluster connection happens here, using the KUBECONFIG secret
+        echo "Pretending to apply kubectl config..." 
+        # kubectl apply -f k8s/ --namespace=staging 
+
+    # DAST (Dynamic Analysis - OWASP ZAP)
+    - name: Run DAST Scan (OWASP ZAP Baseline)
+      uses: zaproxy/action-baseline@v0.11.0
+      with:
+        target: 'http://staging-app-url.com' # Placeholder target
+        fail_action: false # Set to true to enforce policy
+
+  deploy-production:
+    needs: deploy-staging-and-dast
+    runs-on: ubuntu-latest
+    environment: 
+      name: Production
+      # This requires manual approval on GitHub Actions
+    steps:
+    - name: Deployment Step (Requires Manual Approval)
+      run: echo "Production deployment ready for approval."
