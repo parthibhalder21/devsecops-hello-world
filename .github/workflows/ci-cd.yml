@@ -59,14 +59,22 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    # Deployment to Staging (Uses the KUBECONFIG secret)
-    - name: Deploy to Staging Kubernetes
-      uses: azure/setup-kubectl@v4
+    # FIX 2: Manually loads kubectl and forces the use of the KUBECONFIG secret file
+    - name: Install kubectl and Configure Kubeconfig
+      uses: azure/setup-kubectl@v4 # Installs kubectl
     - run: |
+        # Write the KUBECONFIG secret value into a temporary file
+        echo "${{ secrets.KUBECONFIG }}" > kubeconfig.yaml
+        
+        # Set the KUBECONFIG environment variable to use the file
+        export KUBECONFIG=kubeconfig.yaml
+        
+        # Deployment commands
         IMAGE_TAG=${{ env.REGISTRY_URL }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
         sed -i "s|__IMAGE_TAG__|$IMAGE_TAG|g" k8s/deployment.yaml
         echo "Applying deployment to Staging Kubernetes cluster..." 
-        # FIX 2: Added --validate=false to bypass internal validation error
+        
+        # FIX 3: Added --validate=false to bypass Killercoda's validation bug
         kubectl apply -f k8s/ --namespace=staging --validate=false
         
     # DAST (Dynamic Analysis - OWASP ZAP)
@@ -74,14 +82,13 @@ jobs:
       uses: zaproxy/action-baseline@v0.11.0
       with:
         target: 'http://staging-app-url.com' # Placeholder target
-        fail_action: false # Set to true to enforce policy
+        fail_action: false 
         
   deploy-production:
     needs: deploy-staging-and-dast
     runs-on: ubuntu-latest
     environment: 
       name: Production
-      # This requires manual approval on GitHub Actions
     steps:
     - name: Deployment Step (Requires Manual Approval)
       run: echo "Production deployment ready for approval."
